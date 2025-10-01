@@ -1,45 +1,16 @@
-const express = require("express");
-const { Pool } = require("pg");
-const axios = require("axios");
-const cors = require("cors");
-const dotenv = require("dotenv");
+import express from "express";
+import dotenv from "dotenv";
+import steamRoutes from "./routes/steam.js";
+import cors from "cors";
 
 dotenv.config();
-
 const app = express();
-app.use(cors({ origin: "http://localhost:5173" }));
+
 app.use(express.json());
-const port = 3000;
+app.use(cors({ origin: "http://localhost:5173" }));
+app.use("/api", steamRoutes);
 
-const pool = new Pool({
-    user: process.env.USER,
-    host: process.env.HOST,
-    database: process.env.DATABASE,
-    password: process.env.PASSWORD,
-    port: 5432,
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
-
-const STEAM_API_KEY = process.env.STEAM_API_KEY;
-
-app.get("/steam/games/:steamID", async (req, res) => {
-    const { steamID } = req.params;
-    try {
-        const response = await axios.get(
-            `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/`,
-            {
-                params: {
-                    key: STEAM_API_KEY,
-                    steamID: steamID,
-                    include_appinfo: true,
-                    include_played_free_games: true
-                }
-            }
-        );
-        res.json(response.data.response.games);
-    } catch (error) {
-        console.log(error);
-        res.status(500).json({ error: "Failed to fetch Steam games" });
-    }
-});
-
-app.listen(port);
