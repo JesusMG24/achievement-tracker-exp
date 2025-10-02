@@ -15,7 +15,7 @@ export async function scrapeAchievementsStatic(appid) {
     if (rows.length === 0) {
         $(".achieveTxt, .achievement_info").each((i, el) => {
             const name = $(el).find(".name, .achieveName, .achieveTxt h3").text().trim();
-            const desc = $(el).find(".desc, .achieveDesc").text().trim();
+            const desc = $(el).find(".desc, .achieveDesc, .achieveTxt h5").text().trim();
             const percentText = $(el).closest(".achieveRow, .achievement").find(".percentage, .achievePercent, .achieveUnlock").text().trim();
 
             const unlockedPercent = percentText ? parseFloat(percentText.replace("%", "")) : null;
@@ -27,8 +27,8 @@ export async function scrapeAchievementsStatic(appid) {
 
     rows.each((i, el) => {
         const $el = $(el);
-        const name = $el.find(".achieveTxt, .achieveName, .name, .achieveTitle").text().trim() || $el.find("h3").text().trim();
-        const description = $el.find(".achieveTxt .desc, .achieveDesc, .desc").text().trim();
+        const name = $el.find(".achieveTxt h3, .achieveName, .name, .achieveTitle").text().trim() || $el.find("h3").text().trim();
+        const description = $el.find(".achieveTxt h5, .desc, .achieveDesc, .desc").text().trim() || $el.find("h5").text().trim();
         const percentText = $el.find(".percentage, .achievePercent, .percentage_text, .percent").text().trim();
         const unlockedPercent = percentText ? parseFloat(percentText.replace("%", "")) : null;
         const iconUrl = $el.find("img").attr("src") || null;

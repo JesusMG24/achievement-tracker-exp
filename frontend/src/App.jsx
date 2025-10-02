@@ -1,12 +1,14 @@
 import { useState } from "react";
 import SteamGames from "./components/SteamGames";
 
-export default function App() {
+const defaultSteamId = import.meta.env.VITE_STEAM_ID;
 
-  const [steamId, setSteamId] = useState([]);
+export default function App() {
+  const [steamId, setSteamId] = useState([defaultSteamId]);
 
   return (
     <>
+      <h2 className="text-center font-bold mt-3">Owned Games</h2>
       <SteamGames steamId={steamId}/>
     </>
   );

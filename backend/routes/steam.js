@@ -1,6 +1,7 @@
 import express from "express";
 import axios from "axios";
 import pool from "../db/pool.js";
+import { scrapeAchievementsStatic } from "../scrapers/cheerioScraper.js";
 
 const router = express.Router();
 const STEAM_API_KEY = process.env.STEAM_API_KEY;
@@ -58,20 +59,50 @@ router.get("/steam/games/:steamID", async (req, res) => {
       // If games missing then fetch from Steam API
       if (gameResult.rows.length === 0) {
         try {
-          const response = await axios.get(
-          `https://api.steampowered.com/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v0002/`,
-          { params: { gameid: ownedGame.appid } }
-          );
-          const gameAch = response.data.achievementpercentages.achievements || [];
           const newGame = await pool.query(
-            "INSERT INTO steam_games (appid, name, img_icon_url, achievements) VALUES ($1, $2, $3, $4) RETURNING id",
-            [ownedGame.appid, ownedGame.name, ownedGame.img_icon_url, JSON.stringify(gameAch)]
+            `INSERT INTO steam_games 
+            (appid, name, img_icon_url) 
+            VALUES ($1, $2, $3)
+            ON CONFLICT (appid)
+            DO UPDATE SET name = EXCLUDED.name, img_icon_url = EXCLUDED.img_icon_url 
+            RETURNING id`,
+            [ownedGame.appid, ownedGame.name, ownedGame.img_icon_url]
           );
           gameId = newGame.rows[0].id;
+
+          const response = await axios.get(
+            `https://api.steampowered.com/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v0002/`,
+            { params: { gameid: ownedGame.appid } }
+          );
+          const gameAch = response.data?.achievementpercentages?.achievements || [];
+          const storeGameAch = (await scrapeAchievementsStatic(ownedGame.appid)) || [];
+          const combinedAchievements = gameAch.map((ach, index) => {
+            const storeAch = storeGameAch[index] || {};
+            return {
+              position: index,
+              apiname: ach.name,
+              percent: ach.percent,
+              title: storeAch.name ?? storeAch.title ?? null,
+              description: storeAch.description ?? null,
+              icon: storeAch.iconUrl ?? storeAch.icon ?? null
+            };
+          });
+          for (const combAch of combinedAchievements) {
+            await pool.query(
+              `INSERT INTO steam_games_achievements
+              (steam_game_id, apiname, percent, title, description, icon_url, position)
+              VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+              [gameId, combAch.apiname, combAch.percent, combAch.title, combAch.description, combAch.icon, combAch.position]
+            );
+          }
           console.log(`Fetched achievements for ${ownedGame.name}`);
         } catch (error) {
           const newGame = await pool.query(
-            "INSERT INTO steam_games (appid, name, img_icon_url) VALUES ($1, $2, $3) RETURNING id",
+            `INSERT INTO steam_games (appid, name, img_icon_url) 
+            VALUES ($1, $2, $3)
+            ON CONFLICT (appid)
+            DO UPDATE SET name = EXCLUDED.name, img_icon_url = EXCLUDED.img_icon_url  
+            RETURNING id`,
             [ownedGame.appid, ownedGame.name, ownedGame.img_icon_url]
           );
           gameId = newGame.rows[0].id;
@@ -107,6 +138,54 @@ router.get("/steam/games/:steamID", async (req, res) => {
   }
 });
 
+// Force game data refresh
+router.get("/steam/games/refresh/:appid", async (req, res) => {
+  
+  const { appid } = req.params;
+  const gameResult = await pool.query(
+    "SELECT id, name FROM steam_games WHERE appid = $1",
+    [appid]
+  );
+  const gameId = gameResult.rows[0].id;
+  const gameName = gameResult.rows[0].name;
+
+  try {
+    const response = await axios.get(
+      `https://api.steampowered.com/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v0002/`,
+      { params: { gameid: appid } }
+    );
+    const gameAch = response.data?.achievementpercentages?.achievements || [];
+    const storeGameAch = (await scrapeAchievementsStatic(appid)) || [];
+    const combinedAchievements = gameAch.map((ach, index) => {
+      const storeAch = storeGameAch[index] || {};
+      return {
+        position: index,
+        apiname: ach.name,
+        percent: ach.percent,
+        title: storeAch.name ?? storeAch.title ?? null,
+        description: storeAch.description ?? null,
+        icon: storeAch.iconUrl ?? storeAch.icon ?? null
+      };
+    });
+    for (const combAch of combinedAchievements) {
+      await pool.query(
+        `INSERT INTO steam_games_achievements
+        (steam_game_id, apiname, percent, title, description, icon_url, position)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (steam_game_id, apiname)
+        DO UPDATE SET percent = EXCLUDED.percent, title = EXCLUDED.title, description = EXCLUDED.description, icon_url = EXCLUDED.icon_url, position = EXCLUDED.position`,
+        [gameId, combAch.apiname, combAch.percent, combAch.title, combAch.description, combAch.icon, combAch.position]
+      );
+    }
+    console.log(`Fetched achievements for ${gameName}`);
+    res.json("Game refreshed!")
+  } catch (error) {
+    console.error(error.message);
+    res.json("Game could not be refreshed!")
+  }
+
+});
+
 // Look for game data for the given user
 router.get("/steam/achievements/:steamID/:appid", async (req, res) => {  
   const { steamID, appid } = req.params;
@@ -129,21 +208,38 @@ router.get("/steam/achievements/:steamID/:appid", async (req, res) => {
       for (const achievement of userAch) {
         let unlockedAt = null;
         if (achievement.unlocktime && achievement.unlocktime > 0) {
-          unlockedAt = new Date(achievement.unlocktime * 1000).toISOString().replace('T', ' ').replace('Z', '');
+          unlockedAt = new Date(achievement.unlocktime * 1000).toISOString().slice(0, 19).replace('T', ' ');
         }
+
+        // Find achievement_id by apiname and game_id
+        const achIdResult = await pool.query(
+          `SELECT id FROM steam_games_achievements WHERE steam_game_id = $1 AND apiname = $2`,
+          [gameResult.rows[0].id, achievement.apiname]
+        );
+        const achievementId = achIdResult.rows[0]?.id;
+        if (!achievementId) continue; // skip if not found
+
         await pool.query(
-          `INSERT INTO steam_user_achievements (steam_user_id, steam_game_id, achievement_name, unlocked_at, achieved)
+          `INSERT INTO steam_user_achievements (steam_user_id, steam_game_id, achievement_id, unlocked_at, achieved)
           VALUES ($1, $2, $3, $4, $5)
-          ON CONFLICT (steam_user_id, steam_game_id, achievement_name)
+          ON CONFLICT (steam_user_id, steam_game_id, achievement_id)
           DO UPDATE SET unlocked_at = EXCLUDED.unlocked_at, achieved = EXCLUDED.achieved`,
-          [userResult.rows[0].id, gameResult.rows[0].id, achievement.apiname, unlockedAt, achievement.achieved]
+          [userResult.rows[0].id, gameResult.rows[0].id, achievementId, unlockedAt, achievement.achieved]
         );
       }
       const userGameResult = await pool.query(
-        `SELECT achievement_name, unlocked_at, achieved
-        FROM steam_user_achievements
-        WHERE steam_user_id = $1 AND steam_game_id = $2
-        ORDER BY unlocked_at DESC NULLS LAST`,
+        `SELECT ga.position, ga.apiname, ga.percent, ga.title, ga.description, ga.icon_url,
+                ua.unlocked_at, ua.achieved
+         FROM steam_games_achievements ga
+         LEFT JOIN steam_user_achievements ua
+           ON ua.achievement_id = ga.id
+          AND ua.steam_user_id = $1
+          AND ua.steam_game_id = $2
+         WHERE ga.steam_game_id = $2
+         ORDER BY 
+          CASE WHEN ua.unlocked_at IS NULL THEN 1 ELSE 0 END, 
+          ua.unlocked_at DESC,                               
+          ga.percent DESC`,
         [userResult.rows[0].id, gameResult.rows[0].id]
       );
       res.json({
