@@ -82,22 +82,21 @@ router.get("/steam/games/:steamID", async (req, res) => {
       }
 
       // Link user to game
-      const newUserGame = await pool.query(
+      await pool.query(
         `INSERT INTO steam_user_games (steam_user_id, steam_game_id, playtime_forever)
         VALUES ($1, $2, $3)
         ON CONFLICT (steam_user_id, steam_game_id)
         DO UPDATE SET playtime_forever = EXCLUDED.playtime_forever`,
         [userId, gameId, ownedGame.playtime_forever]
       );
-
-      // Sync user game Achievements
     }
 
     const joinedData = await pool.query(
       `SELECT g.appid, g.name, g.img_icon_url, ug.playtime_forever, ug.last_played
        FROM steam_user_games ug
        JOIN steam_games g ON ug.steam_game_id = g.id
-       WHERE ug.steam_user_id = $1`,
+       WHERE ug.steam_user_id = $1
+       ORDER BY g.name ASC`,
       [userId]
     );
 
@@ -105,6 +104,68 @@ router.get("/steam/games/:steamID", async (req, res) => {
     
   } catch (error) {
     console.error(error.message); 
+  }
+});
+
+// Look for game data for the given user
+router.get("/steam/achievements/:steamID/:appid", async (req, res) => {  
+  const { steamID, appid } = req.params;
+  try {
+    const userResult = await pool.query(
+      `SELECT id FROM steam_users WHERE steam_id = $1`,
+      [steamID]
+    );
+    const gameResult = await pool.query(
+      `SELECT id, name, img_icon_url FROM steam_games WHERE appid = $1`,
+      [appid]
+    );
+    // Sync user game achievements
+    try {
+      const response = await axios.get(
+        `https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v0001/`,
+        { params: { appid: appid, key: STEAM_API_KEY, steamid: steamID } }
+      );
+      const userAch = response.data.playerstats.achievements;
+      for (const achievement of userAch) {
+        let unlockedAt = null;
+        if (achievement.unlocktime && achievement.unlocktime > 0) {
+          unlockedAt = new Date(achievement.unlocktime * 1000).toISOString().replace('T', ' ').replace('Z', '');
+        }
+        await pool.query(
+          `INSERT INTO steam_user_achievements (steam_user_id, steam_game_id, achievement_name, unlocked_at, achieved)
+          VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT (steam_user_id, steam_game_id, achievement_name)
+          DO UPDATE SET unlocked_at = EXCLUDED.unlocked_at, achieved = EXCLUDED.achieved`,
+          [userResult.rows[0].id, gameResult.rows[0].id, achievement.apiname, unlockedAt, achievement.achieved]
+        );
+      }
+      const userGameResult = await pool.query(
+        `SELECT achievement_name, unlocked_at, achieved
+        FROM steam_user_achievements
+        WHERE steam_user_id = $1 AND steam_game_id = $2
+        ORDER BY unlocked_at DESC NULLS LAST`,
+        [userResult.rows[0].id, gameResult.rows[0].id]
+      );
+      res.json({
+        game: {
+          name: gameResult.rows[0].name,
+          img_icon_url: gameResult.rows[0].img_icon_url,
+          appid: appid
+        },
+        achievements: userGameResult.rows
+      });
+    } catch (error) {
+      console.error(`Failed to fetch achievements for ${gameResult.rows[0].name}: ${(error.message)}`);
+      res.json({
+        game: {
+          name: gameResult.rows[0].name,
+          img_icon_url: gameResult.rows[0].img_icon_url,
+          appid: appid
+        }
+      });
+    }
+  } catch (error) {
+    console.error(error.message);
   }
 });
 
