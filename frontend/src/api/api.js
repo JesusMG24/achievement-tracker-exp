@@ -1,7 +1,7 @@
 import axios from "axios";
 
 const api = axios.create({
-    baseURL: "http://localhost:3000/api",
+    baseURL: "https://achievement-tracker-exp-production.up.railway.app/api",
 });
 
 export default api
