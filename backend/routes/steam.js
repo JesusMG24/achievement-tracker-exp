@@ -257,7 +257,8 @@ router.get("/steam/achievements/:steamID/:appid", async (req, res) => {
           name: gameResult.rows[0].name,
           img_icon_url: gameResult.rows[0].img_icon_url,
           appid: appid
-        }
+        },
+        achievements: []
       });
     }
   } catch (error) {

@@ -10,8 +10,8 @@ export default function SteamGames({ steamId }) {
 
     const gameList = useMemo(() => (
         games ? games.map((game) => (
-            <li key={game.appid} className="flex gap-5">
-                <img className="h-[8vw] aspect-square" src={`http://media.steampowered.com/steamcommunity/public/images/apps/${game.appid}/${game.img_icon_url}.jpg`} />
+            <li key={game.appid} className="flex gap-5 md:w-[40vw] 2xl:w-100">
+                <img className="h-[8vw] aspect-square md:h-10" src={`http://media.steampowered.com/steamcommunity/public/images/apps/${game.appid}/${game.img_icon_url}.jpg`} />
                 <strong><a href={`/steam/achievements/${steamId}/${game.appid}`}>{game.name}</a></strong>
             </li>
         )) : []
@@ -21,7 +21,7 @@ export default function SteamGames({ steamId }) {
 
     return (
         <div>
-            <ul className="flex flex-col gap-5 w-screen mt-5">
+            <ul className="flex flex-col gap-5 w-screen p-5 md:flex-row md:flex-wrap md:justify-around">
                 {gameList}
             </ul>
         </div>
